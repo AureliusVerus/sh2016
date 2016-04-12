@@ -1,6 +1,7 @@
 import org.apache.spark.graphx._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.broadcast.Broadcast
+import org.apache.spark.sql.{Row, SQLContext}
 
 case class UserPageRank(user: Int, rank: Double)
 
@@ -16,5 +17,10 @@ object PageRank {
     }
 
     Graph.fromEdges(edges, 1).staticPageRank(numIterations).vertices.map(v => UserPageRank(v._1.toInt, v._2))
+  }
+
+  def readFromParquet(sqlc: SQLContext, path: String)  = {
+    sqlc.read.parquet(path)
+      .map{ case Row(k: Long, v: Double) => k.toInt -> v }
   }
 }

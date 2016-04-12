@@ -5,6 +5,6 @@ object OtherDetails {
 
   def readFriendsCount(sqlc: SQLContext, path: String) : RDD[(Int, Int)] = {
     sqlc.read.parquet(path)
-      .map(r => (r.getAs[Long](0).toInt, r.getAs[Long](8).toInt))
+      .map(r => r.getAs[Long](0).toInt -> r.getAs[Long](8).toInt)
   }
 }

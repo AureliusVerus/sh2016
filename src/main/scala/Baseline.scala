@@ -52,6 +52,25 @@ object Baseline {
       SocialGraph.reverse(graph).toDF().write.parquet(paths.reversedGraph)
     }
 
+    val mainUsers = graph.map(user => user.uid)
+    val mainUsersBC = sc.broadcast(mainUsers.collect().toSet)
+
+    val pageRanks = {
+      if (!paths.exists(paths.pageRank)) {
+        PageRank.computeStatic(graph, mainUsersBC).toDF().write.parquet(paths.pageRank)
+      }
+
+      PageRank.readFromParquet(sqlc, paths.pageRank)
+    }
+
+    val maxPageRank = pageRanks.map(t => t._2).max()
+    val pageRanksBC = sc.broadcast(pageRanks.collectAsMap())
+
+    val mainUsersFriendsCount = graph.map(user => user.uid -> user.friends.length)
+    val otherUsersFriendsCount = OtherDetails.readFriendsCount(sqlc, paths.otherDetails)
+    val friendsCount = mainUsersFriendsCount.union(otherUsersFriendsCount)
+    val friendsCountBC = sc.broadcast(friendsCount.collectAsMap())
+
     // for each pair of ppl count the amount of their common friends
     // amount of shared friends for pair (A, B) and for pair (B, A) is the same
     // so order pair: A < B and count common friends for pairs unique up to permutation
