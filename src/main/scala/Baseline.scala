@@ -4,6 +4,7 @@
 
 
 import breeze.numerics.abs
+import org.apache.hadoop.fs.Path
 import org.apache.hadoop.io.compress.GzipCodec
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.classification.{LogisticRegressionModel, LogisticRegressionWithLBFGS}
@@ -32,45 +33,24 @@ object Baseline {
     import sqlc.implicits._
 
     val dataDir = if (args.length == 1) args(0) else "./"
-
-    val graphPath = dataDir + "trainGraph"
-    val reversedGraphPath = dataDir + "trainSubReversedGraph"
-    val commonFriendsPath = dataDir + "commonFriendsCountsPartitioned"
-    val demographyPath = dataDir + "demography"
-    val predictionPath = dataDir + "prediction"
-    val modelPath = dataDir + "LogisticRegressionModel"
-    val numPartitions = 200
-    val numPartitionsGraph = 107
-
-    // read graph, flat and reverse it
-    // step 1.a from description
+    val paths = new Paths(dataDir, sc)
 
     val graph = {
-      sc.textFile(graphPath)
-        .map(line => {
-          val lineSplit = line.split("\t")
-          val user = lineSplit(0).toInt
-          val friends = {
-            lineSplit(1)
-              .replace("{(", "")
-              .replace(")}", "")
-              .split("\\),\\(")
-              .map(t => t.split(",")(0).toInt)
-          }
-          UserFriends(user, friends)
-        })
+      if (paths.exists(paths.graphWithInteractions)) {
+        SocialGraph.readFromParquet(sqlc, paths.graphWithInteractions)
+      } else {
+        val sourceGraph = SocialGraph.loadFromText(sc, paths.graph)
+        val interactionScores = Interactions.readFromParquet(sqlc, paths.interactions)
+        val graphWithInteractions = SocialGraph.joinWithInteractions(sourceGraph, interactionScores)
+        graphWithInteractions.toDF().write.parquet(paths.graphWithInteractions)
+
+        graphWithInteractions
+      }
     }
 
-    graph
-      .filter(userFriends => userFriends.friends.length >= 8 && userFriends.friends.length <= 1000)
-      .flatMap(userFriends => userFriends.friends.map(x => (x, userFriends.user)))
-      .groupByKey(numPartitions)
-      .map(t => UserFriends(t._1, t._2.toArray))
-      .map(userFriends => userFriends.friends.sorted)
-      .filter(friends => friends.length >= 2 && friends.length <= 2000)
-      .map(friends => new Tuple1(friends))
-      .toDF
-      .write.parquet(reversedGraphPath)
+    if (!paths.exists(paths.reversedGraph)) {
+      SocialGraph.reverse(graph).toDF().write.parquet(paths.reversedGraph)
+    }
 
     // for each pair of ppl count the amount of their common friends
     // amount of shared friends for pair (A, B) and for pair (B, A) is the same
