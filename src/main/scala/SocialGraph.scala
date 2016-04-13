@@ -7,7 +7,6 @@ case class SocialGraphUser(uid: Int, friends: Array[SocialGraphFriend])
 
 object SocialGraph {
   val numGraphPartitions = 200
-  val numPairsPartitions = 107
 
   def loadFromText(sc: SparkContext, path: String) = {
     val graph = {
