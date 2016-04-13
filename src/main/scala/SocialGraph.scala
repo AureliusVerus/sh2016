@@ -4,7 +4,6 @@ import org.apache.spark.sql.{Row, SQLContext}
 
 case class SocialGraphFriend(uid: Int, mask: Int, interactionScore: Double = 0f)
 case class SocialGraphUser(uid: Int, friends: Array[SocialGraphFriend])
-case class SocialGraphPair(uid1: Int, uid2: Int)
 
 object SocialGraph {
   val numGraphPartitions = 200
@@ -33,7 +32,7 @@ object SocialGraph {
   def readFromParquet(sqlc: SQLContext, path: String) : RDD[SocialGraphUser] = {
     sqlc.read.parquet(path).map((r: Row) => {
       val user = r.getAs[Int](0)
-      val friends = r.getAs[Seq[Row]](1).map { case Row(uid: Int, mask: Int, score: Int) => SocialGraphFriend(uid, mask, score) }.toArray
+      val friends = r.getAs[Seq[Row]](1).map { case Row(uid: Int, mask: Int, score: Double) => SocialGraphFriend(uid, mask, score) }.toArray
       SocialGraphUser(user, friends)
     })
   }
@@ -60,9 +59,5 @@ object SocialGraph {
       .groupByKey(numGraphPartitions)
       .map(t => SocialGraphUser(t._1, t._2.toArray.sortWith(_.uid < _.uid)))
       .filter(userFriends => userFriends.friends.length >= 2 && userFriends.friends.length <= 2000)
-  }
-
-  def generatePairsWithScores(user: SocialGraphUser, k: Int) = {
-
   }
 }

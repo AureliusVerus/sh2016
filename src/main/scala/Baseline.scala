@@ -4,7 +4,6 @@
 
 
 import breeze.numerics.abs
-import org.apache.hadoop.fs.Path
 import org.apache.hadoop.io.compress.GzipCodec
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.mllib.classification.{LogisticRegressionModel, LogisticRegressionWithLBFGS}
@@ -21,12 +20,28 @@ case class PairWithCommonFriends(person1: Int, person2: Int, commonFriendsCount:
 case class UserFriends(user: Int, friends: Array[Int])
 case class AgeSex(age: Int, sex: Int)
 
+case class PairScores(commonFriends: Int,
+                      commonMainFriends: Int,
+                      adamicAdar: Double,
+                      adamicAdar2: Double,
+                      pageRankScore: Double,
+                      interactionScore: Double,
+                      commonRelatives: Int,
+                      commonColleagues: Int,
+                      commonSchoolmates: Int,
+                      commonArmyFellows: Int,
+                      commonOthers: Int,
+                      maskOr: Int,
+                      maskAnd: Int)
+case class Pair(uid1: Int, uid2: Int, scores: PairScores)
+
 object Baseline {
 
   def main(args: Array[String]) {
 
     val sparkConf = new SparkConf()
       .setAppName("Baseline")
+      .set("spark.driver.maxResultSize", "2g")
     val sc = new SparkContext(sparkConf)
     val sqlc = new SQLContext(sc)
 
@@ -64,6 +79,9 @@ object Baseline {
     }
 
     val maxPageRank = pageRanks.map(t => t._2).max()
+    println("maxPageRank = " + maxPageRank)
+    println("pageRanks count = " + pageRanks.count())
+    println("mainUsers size = " + mainUsersBC.value.size)
     val pageRanksBC = sc.broadcast(pageRanks.collectAsMap())
 
     val mainUsersFriendsCount = graph.map(user => user.uid -> user.friends.length)
@@ -71,160 +89,90 @@ object Baseline {
     val friendsCount = mainUsersFriendsCount.union(otherUsersFriendsCount)
     val friendsCountBC = sc.broadcast(friendsCount.collectAsMap())
 
-    // for each pair of ppl count the amount of their common friends
-    // amount of shared friends for pair (A, B) and for pair (B, A) is the same
-    // so order pair: A < B and count common friends for pairs unique up to permutation
-    // step 1.b
+    def generatePairsWithScores(user: SocialGraphUser, numPartitions: Int, k: Int) = {
+      val pairs = ArrayBuffer.empty[((Int, Int), PairScores)]
 
-    def generatePairs(pplWithCommonFriends: Seq[Int], numPartitions: Int, k: Int) = {
-      val pairs = ArrayBuffer.empty[(Int, Int)]
-      for (i <- 0 until pplWithCommonFriends.length) {
-        if (pplWithCommonFriends(i) % numPartitions == k) {
-          for (j <- i + 1 until pplWithCommonFriends.length) {
-            pairs.append((pplWithCommonFriends(i), pplWithCommonFriends(j)))
+      val friends = friendsCountBC.value.getOrElse(user.uid, 0)
+      val mainFriend = if (mainUsersBC.value.contains(user.uid)) 1 else 0
+      val adamicAdar = 1.0 / Math.log(friends.toDouble + 1.0)
+      val adamicAdar2 = 1.0 / Math.log10(friends.toDouble + 1.0)
+      val pageRankScore = pageRanksBC.value.getOrElse(user.uid, 0.0)
+
+      for (i <- 0 until user.friends.length) {
+        val p1 = user.friends(i).uid
+
+        if (p1 % numPartitions == k && mainUsersBC.value.contains(p1)) {
+
+          val mask1 = user.friends(i).mask
+          val isRelatives1 = MaskHelper.isRelatives(mask1)
+          val isColleague1 = MaskHelper.isColleague(mask1)
+          val isSchoolmate1 = MaskHelper.isSchoolmate(mask1)
+          val isArmyFellow1 = MaskHelper.isArmyFellow(mask1)
+          val isOther1 = MaskHelper.isOther(mask1)
+          val interaction1 = user.friends(i).interactionScore
+
+          for (j <- 0 until user.friends.length) {
+            if (i != j) {
+              val p2 = user.friends(j).uid
+
+              if (mainUsersBC.value.contains(p2)) {
+                val mask2 = user.friends(j).mask
+                val isRelatives2 = MaskHelper.isRelatives(mask2)
+                val isColleague2 = MaskHelper.isColleague(mask2)
+                val isSchoolmate2 = MaskHelper.isSchoolmate(mask2)
+                val isArmyFellow2 = MaskHelper.isArmyFellow(mask2)
+                val isOther2 = MaskHelper.isOther(mask2)
+                val interaction2 = user.friends(j).interactionScore
+
+                val interactionScore = interaction1 * interaction2
+
+                pairs.append(((p1, p2), PairScores(
+                  1, mainFriend, adamicAdar, adamicAdar2, pageRankScore, interactionScore,
+                  isRelatives1 * isRelatives2,
+                  isColleague1 * isColleague2,
+                  isSchoolmate1 * isSchoolmate2,
+                  isArmyFellow1 * isArmyFellow2,
+                  isOther1 * isOther2,
+                  mask1 | mask2,
+                  mask1 & mask2
+                )))
+              }
+            }
           }
         }
       }
+
       pairs
     }
 
-    for (k <- 0 until numPartitionsGraph) {
-      val commonFriendsCounts = {
-        sqlc.read.parquet(reversedGraphPath)
-          .map(t => generatePairs(t.getAs[Seq[Int]](0), numPartitionsGraph, k))
-          .flatMap(pair => pair.map(x => x -> 1))
-          .reduceByKey((x, y) => x + y)
-          .map(t => PairWithCommonFriends(t._1._1, t._1._2, t._2))
-          .filter(pair => pair.commonFriendsCount > 8)
-      }
-
-      commonFriendsCounts.toDF.repartition(4).write.parquet(commonFriendsPath + "/part_" + k)
-    }
-
-    // prepare data for training model
-    // step 2
-
-    val commonFriendsCounts = {
-      sqlc
-        .read.parquet(commonFriendsPath + "/part_33")
-        .map(t => PairWithCommonFriends(t.getAs[Int](0), t.getAs[Int](1), t.getAs[Int](2)))
-    }
-
-
-    // step 3
-    val usersBC = sc.broadcast(graph.map(userFriends => userFriends.user).collect().toSet)
-
-    val positives = {
-      graph
-        .flatMap(
-          userFriends => userFriends.friends
-            .filter(x => (usersBC.value.contains(x) && x > userFriends.user))
-            .map(x => (userFriends.user, x) -> 1.0)
-        )
-    }
-
-    // step 4
-    val ageSex = {
-      sc.textFile(demographyPath)
-        .map(line => {
-          val lineSplit = line.trim().split("\t")
-          if (lineSplit(2) == "") {
-            (lineSplit(0).toInt -> AgeSex(0, lineSplit(3).toInt))
-          }
-          else {
-            (lineSplit(0).toInt -> AgeSex(lineSplit(2).toInt, lineSplit(3).toInt))
-          }
-        })
-    }
-
-    val ageSexBC = sc.broadcast(ageSex.collectAsMap())
-
-    // step 5
-    def prepareData(
-                     commonFriendsCounts: RDD[PairWithCommonFriends],
-                     positives: RDD[((Int, Int), Double)],
-                     ageSexBC: Broadcast[scala.collection.Map[Int, AgeSex]]) = {
-
-      commonFriendsCounts
-        .map(pair => (pair.person1, pair.person2) -> (Vectors.dense(
-          pair.commonFriendsCount.toDouble,
-          abs(ageSexBC.value.getOrElse(pair.person1, AgeSex(0, 0)).age - ageSexBC.value.getOrElse(pair.person2, AgeSex(0, 0)).age).toDouble,
-          if (ageSexBC.value.getOrElse(pair.person1, AgeSex(0, 0)).sex == ageSexBC.value.getOrElse(pair.person2, AgeSex(0, 0)).sex) 1.0 else 0.0))
-        )
-        .leftOuterJoin(positives)
-    }
-
-    val data = {
-      prepareData(commonFriendsCounts, positives, ageSexBC)
-        .map(t => LabeledPoint(t._2._2.getOrElse(0.0), t._2._1))
-    }
-
-
-    // split data into training (10%) and validation (90%)
-    // step 6
-    val splits = data.randomSplit(Array(0.1, 0.9), seed = 11L)
-    val training = splits(0).cache()
-    val validation = splits(1)
-
-    // run training algorithm to build the model
-    val model = {
-      new LogisticRegressionWithLBFGS()
-        .setNumClasses(2)
-        .run(training)
-    }
-
-    model.clearThreshold()
-    model.save(sc, modelPath)
-
-    val predictionAndLabels = {
-      validation.map { case LabeledPoint(label, features) =>
-        val prediction = model.predict(features)
-        (prediction, label)
-      }
-    }
-
-    // estimate model quality
-    @transient val metricsLogReg = new BinaryClassificationMetrics(predictionAndLabels, 100)
-    val threshold = metricsLogReg.fMeasureByThreshold(2.0).sortBy(-_._2).take(1)(0)._1
-
-    val rocLogReg = metricsLogReg.areaUnderROC()
-    println("model ROC = " + rocLogReg.toString)
-
-    // compute scores on the test set
-    // step 7
-    val testCommonFriendsCounts = {
-      sqlc
-        .read.parquet(commonFriendsPath + "/part_*/")
-        .map(t => PairWithCommonFriends(t.getAs[Int](0), t.getAs[Int](1), t.getAs[Int](2)))
-        .filter(pair => pair.person1 % 11 == 7 || pair.person2 % 11 == 7)
-    }
-
-    val testData = {
-      prepareData(testCommonFriendsCounts, positives, ageSexBC)
-        .map(t => t._1 -> LabeledPoint(t._2._2.getOrElse(0.0), t._2._1))
-        .filter(t => t._2.label == 0.0)
-    }
-
-    // step 8
-    val testPrediction = {
-      testData
-        .flatMap { case (id, LabeledPoint(label, features)) =>
-          val prediction = model.predict(features)
-          Seq(id._1 -> (id._2, prediction), id._2 -> (id._1, prediction))
+    for (k <- 0 until SocialGraph.numPairsPartitions) {
+      if (!paths.exists(paths.getPairsPart(k))) {
+        val commonFriendPairs = {
+          SocialGraph.readFromParquet(sqlc, paths.reversedGraph)
+            .flatMap(t => generatePairsWithScores(t, SocialGraph.numPairsPartitions, k))
+            .reduceByKey((scores1, scores2) => {
+              PairScores(
+                scores1.commonFriends + scores2.commonFriends,
+                scores1.commonMainFriends + scores2.commonMainFriends,
+                scores1.adamicAdar + scores2.adamicAdar,
+                scores1.adamicAdar2 + scores2.adamicAdar2,
+                scores1.pageRankScore + scores2.pageRankScore,
+                scores1.interactionScore + scores2.interactionScore,
+                scores1.commonRelatives + scores2.commonRelatives,
+                scores1.commonColleagues + scores2.commonColleagues,
+                scores1.commonSchoolmates + scores2.commonSchoolmates,
+                scores1.commonArmyFellows + scores2.commonArmyFellows,
+                scores1.commonOthers + scores2.commonOthers,
+                scores1.maskOr | scores2.maskOr,
+                scores1.maskAnd | scores2.maskAnd
+              )
+            }).map(p => Pair(p._1._1, p._1._2, p._2))
+            //.filter(p => p.scores.commonFriends > 1)
         }
-        .filter(t => t._1 % 11 == 7 && t._2._2 >= threshold)
-        .groupByKey(numPartitions)
-        .map(t => {
-          val user = t._1
-          val firendsWithRatings = t._2
-          val topBestFriends = firendsWithRatings.toList.sortBy(-_._2).take(100).map(x => x._1)
-          (user, topBestFriends)
-        })
-        .sortByKey(true, 1)
-        .map(t => t._1 + "\t" + t._2.mkString("\t"))
-    }
 
-    testPrediction.saveAsTextFile(predictionPath,  classOf[GzipCodec])
+        commonFriendPairs.repartition(16).toDF.write.parquet(paths.getPairsPart(k))
+      }
+    }
 
   }
 }

@@ -21,6 +21,6 @@ object PageRank {
 
   def readFromParquet(sqlc: SQLContext, path: String)  = {
     sqlc.read.parquet(path)
-      .map{ case Row(k: Long, v: Double) => k.toInt -> v }
+      .map{ case Row(k: Int, v: Double) => k.toInt -> v }
   }
 }
