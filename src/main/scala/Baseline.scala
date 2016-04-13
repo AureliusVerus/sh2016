@@ -98,45 +98,45 @@ object Baseline {
       val adamicAdar2 = 1.0 / Math.log10(friends.toDouble + 1.0)
       val pageRankScore = pageRanksBC.value.getOrElse(user.uid, 0.0)
 
-      for (i <- 0 until user.friends.length) {
-        val p1 = user.friends(i).uid
+      val friendsForPairs = user.friends.filter(f => mainUsersBC.value.contains(f.uid))
 
-        if (p1 % numPartitions == k && mainUsersBC.value.contains(p1)) {
+      for (i <- 0 until friendsForPairs.length) {
+        val p1 = friendsForPairs(i).uid
 
-          val mask1 = user.friends(i).mask
+        if (p1 % numPartitions == k) {
+
+          val mask1 = friendsForPairs(i).mask
           val isRelatives1 = MaskHelper.isRelatives(mask1)
           val isColleague1 = MaskHelper.isColleague(mask1)
           val isSchoolmate1 = MaskHelper.isSchoolmate(mask1)
           val isArmyFellow1 = MaskHelper.isArmyFellow(mask1)
           val isOther1 = MaskHelper.isOther(mask1)
-          val interaction1 = user.friends(i).interactionScore
+          val interaction1 = friendsForPairs(i).interactionScore
 
-          for (j <- 0 until user.friends.length) {
+          for (j <- 0 until friendsForPairs.length) {
             if (i != j) {
-              val p2 = user.friends(j).uid
+              val p2 = friendsForPairs(j).uid
 
-              if (mainUsersBC.value.contains(p2)) {
-                val mask2 = user.friends(j).mask
-                val isRelatives2 = MaskHelper.isRelatives(mask2)
-                val isColleague2 = MaskHelper.isColleague(mask2)
-                val isSchoolmate2 = MaskHelper.isSchoolmate(mask2)
-                val isArmyFellow2 = MaskHelper.isArmyFellow(mask2)
-                val isOther2 = MaskHelper.isOther(mask2)
-                val interaction2 = user.friends(j).interactionScore
+              val mask2 = friendsForPairs(j).mask
+              val isRelatives2 = MaskHelper.isRelatives(mask2)
+              val isColleague2 = MaskHelper.isColleague(mask2)
+              val isSchoolmate2 = MaskHelper.isSchoolmate(mask2)
+              val isArmyFellow2 = MaskHelper.isArmyFellow(mask2)
+              val isOther2 = MaskHelper.isOther(mask2)
+              val interaction2 = friendsForPairs(j).interactionScore
 
-                val interactionScore = interaction1 * interaction2
+              val interactionScore = interaction1 * interaction2
 
-                pairs.append(((p1, p2), PairScores(
-                  1, mainFriend, adamicAdar, adamicAdar2, pageRankScore, interactionScore,
-                  isRelatives1 * isRelatives2,
-                  isColleague1 * isColleague2,
-                  isSchoolmate1 * isSchoolmate2,
-                  isArmyFellow1 * isArmyFellow2,
-                  isOther1 * isOther2,
-                  mask1 | mask2,
-                  mask1 & mask2
-                )))
-              }
+              pairs.append(((p1, p2), PairScores(
+                1, mainFriend, adamicAdar, adamicAdar2, pageRankScore, interactionScore,
+                isRelatives1 * isRelatives2,
+                isColleague1 * isColleague2,
+                isSchoolmate1 * isSchoolmate2,
+                isArmyFellow1 * isArmyFellow2,
+                isOther1 * isOther2,
+                mask1 | mask2,
+                mask1 & mask2
+              )))
             }
           }
         }
