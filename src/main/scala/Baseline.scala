@@ -1,8 +1,3 @@
-/**
-  * Baseline for hackaton
-  */
-
-
 import breeze.numerics.abs
 import org.apache.hadoop.io.compress.GzipCodec
 import org.apache.spark.broadcast.Broadcast
@@ -15,11 +10,6 @@ import org.apache.spark.sql.SQLContext
 import org.apache.spark.{SparkConf, SparkContext}
 
 import scala.collection.mutable.ArrayBuffer
-
-case class PairWithCommonFriends(person1: Int, person2: Int, commonFriendsCount: Int)
-case class UserFriends(user: Int, friends: Array[Int])
-case class AgeSex(age: Int, sex: Int)
-
 
 object Baseline {
 
@@ -84,5 +74,24 @@ object Baseline {
       }
     }
 
+    val demography = Demography.loadFromText(sc, paths.demography)
+    val countriesCount = demography.map(x => x._2.countryId -> 1).reduceByKey(_+_)
+    val locationsCount = demography.map(x => x._2.locationId -> 1).reduceByKey(_+_)
+    val loginRegionsCount = demography.map(x => x._2.loginRegion -> 1).reduceByKey(_+_)
+
+    val demographyBC = sc.broadcast(demography.collectAsMap())
+    val countriesCountBC = sc.broadcast(countriesCount.collectAsMap())
+    val locationsCountBC = sc.broadcast(locationsCount.collectAsMap())
+    val loginRegionsCountBC = sc.broadcast(loginRegionsCount.collectAsMap())
+
+    val positives = graph.flatMap(user =>
+      user.friends
+        .filter(f => mainUsersBC.value.contains(f.uid) && f.uid > user.uid)
+        .map(f => (user.uid, f.uid) -> 1.0)
+    )
+
+    def prepareTrainData() = {
+
+    }
   }
 }
