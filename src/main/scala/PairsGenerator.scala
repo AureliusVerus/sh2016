@@ -60,7 +60,7 @@ object PairsGenerator {
           val isOther2 = MaskHelper.isOther(mask2)
           val interaction2 = friendsForPairs(j).interactionScore
 
-          val interactionScore = interaction1 * interaction2
+          val interactionScore = (interaction1 + interaction2) * 0.5
 
           pairs.append(((p1, p2), PairScores(
             1, mainFriend, adamicAdar, adamicAdar2, pageRankScore, interactionScore,
