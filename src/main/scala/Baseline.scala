@@ -183,6 +183,7 @@ object Baseline {
       features.append(if (pair.scores.maskAnd > 1) 1.0 else 0.0)
 
       features.append(abs(friendsCount1 - friendsCount2))
+      features.append((friendsCount1 + friendsCount2) * 0.5)
 
       features.append(Math.log((friendsCount1 * friendsCount2) + 1.0))
 
@@ -193,16 +194,12 @@ object Baseline {
       features.append(pageRankMean)
       features.append(pageRankMeanNormalized)
 
-     /* val nans = ArrayBuffer.empty[Double]
-      for (k <- 0 until features.length) {
-        if (features(k).isNaN)
-          nans.append(k)
-      }*/
-
       Vectors.dense(features.toArray)
     }
 
     def prepareTrainData(pairs: RDD[Pair], positives: RDD[((Int, Int), Double)]) = {
+      val maxSizePerLabel = 500000
+
       val data = {
         pairs.map(p => (p.uid1, p.uid2) -> p)
           .leftOuterJoin(positives)
@@ -216,7 +213,9 @@ object Baseline {
       val positiveCount = positiveData.count()
       val negativeCount = negativeData.count()
 
-      val labledSetSize = math.min(positiveCount, negativeCount) - 1
+      val labledSetSize = math.min(math.min(positiveCount, negativeCount), maxSizePerLabel) - 1
+
+      println("labledSetSize = " + labledSetSize)
 
       val positiveDataClamped = sc.parallelize(positiveData.take(labledSetSize.toInt))
       val negativeDataClamped = sc.parallelize(negativeData.take(labledSetSize.toInt))
@@ -224,7 +223,7 @@ object Baseline {
       val positiveSplits = positiveDataClamped.randomSplit(Array(0.7, 0.3))
       val negativeSplits = negativeDataClamped.randomSplit(Array(0.7, 0.3))
 
-      val training = positiveSplits(0).union(negativeSplits(0))
+      val training = positiveSplits(0).union(negativeSplits(0)).cache()
       val validation = positiveSplits(1).union(negativeSplits(1))
 
       (training, validation)
@@ -245,6 +244,20 @@ object Baseline {
     val trainData = prepareTrainData(PairsGenerator.readFromParquet(sqlc, paths.getPairsPart(33)), positives)
     val training = trainData._1
     val validation = trainData._2
+
+    val checkNans = training.map(x => {
+      val nans = ArrayBuffer.empty[Double]
+      if (x.label.isNaN)
+        nans.append(666)
+      for (k <- 0 until x.features.size) {
+        if (x.features.apply(k).isNaN || x.features.apply(k).isInfinite)
+          nans.append(k)
+      }
+      nans.toArray
+    }).filter(n => n.length > 0)
+
+    println("checkNans count = " + checkNans.count())
+    checkNans.foreach(x => println(x.mkString(" ")))
 
     val model = {
       val logit = new LogisticRegressionWithLBFGS()

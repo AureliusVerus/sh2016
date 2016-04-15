@@ -30,8 +30,8 @@ object PairsGenerator {
 
     val friends = friendsCount.value.getOrElse(user.uid, 0)
     val mainFriend = if (coreUsers.value.contains(user.uid)) 1 else 0
-    val adamicAdar = 1.0 / Math.log(friends.toDouble + 1.0)
-    val adamicAdar2 = 1.0 / Math.log10(friends.toDouble + 1.0)
+    val adamicAdar = if (friends >= 2) 1.0 / Math.log(friends.toDouble) else 1.0
+    val adamicAdar2 = if (friends >= 2) 1.0 / Math.log10(friends.toDouble) else 1.0
     val pageRankScore = pageRanks.value.getOrElse(user.uid, 0.0)
 
     val friendsForPairs = user.friends.filter(f => coreUsers.value.contains(f.uid))
